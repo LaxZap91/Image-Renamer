@@ -8,8 +8,7 @@ from pillow_heif import register_heif_opener
 
 register_heif_opener()
 
-# source_folder = argv[1]
-source_folder = r"E:\Code Projects\Python Projects\Image Renamer\imgs"
+source_folder = argv[1]
 
 
 def get_time(path):
@@ -33,10 +32,11 @@ def get_time(path):
                 ).strftime(r"%Y-%d-%m-%H-%M-%S")
                 return date_obj
             except KeyError:
-                date_obj = datetime.fromtimestamp(getctime(path)).strftime(
-                    r"%Y-%d-%m-%H-%M-%S"
-                )
-                return date_obj
+                return None
+                # date_obj = datetime.fromtimestamp(getctime(path)).strftime(
+                #     r"%Y-%d-%m-%H-%M-%S"
+                # )
+                # return date_obj
 
 
 for file_name in listdir(source_folder):
@@ -47,5 +47,8 @@ for file_name in listdir(source_folder):
         or file_name.upper().endswith(".PNG")
     ) and isfile(join(source_folder, file_name)):
         file_time = get_time(join(source_folder, file_name))
-        new_file_name = f"{file_time}-{file_name}"
+        if file_time:
+            new_file_name = f"{file_time}-{file_name}"
+        else:
+            new_file_name = file_name
         rename(join(source_folder, file_name), join(source_folder, new_file_name))
