@@ -1,100 +1,135 @@
 import argparse
 from os import rename, walk, sep
-from os.path import getctime, join
+from os.path import getctime, isdir
+from pathlib import Path
 from datetime import datetime
+
+from typing import Union, Final
 
 from PIL import Image, ExifTags
 from pillow_heif import HeifImagePlugin
 
-SUPPORTED_EXTENSIONS = (*tuple(Image.registered_extensions()), ".heic")
+SUPPORTED_EXTENSIONS: Final[tuple[str, ...]] = (
+    *tuple(Image.registered_extensions()),
+    ".heic",
+)
 
 
-def get_time(path, include_creation_type, formating):
+def get_time(
+    path: Path, include_creation_type: bool, formatting: str
+) -> Union[str, None]:
     with Image.open(path) as image:
+        image_exif = image.getexif()
+
         try:
-            image_exif = image._getexif()
+            image_date = datetime.strptime(
+                image_exif.get(306), "%Y:%m:%d %H:%M:%S"
+            ).strftime(formatting)
+            return image_date
+        except (KeyError, TypeError):
+            pass
+
+        try:
+            image_date = datetime.strptime(
+                image_exif.get(36867), "%Y:%m:%d %H:%M:%S"
+            ).strftime(formatting)
+            return image_date
+        except (KeyError, TypeError):
+            pass
+
+        try:
             exif = {
                 ExifTags.TAGS[k]: v
                 for k, v in image_exif.items()
                 if k in ExifTags.TAGS and type(v) is not bytes
             }
-            date_obj = datetime.strptime(
-                exif["DateTimeOriginal"], r"%Y:%m:%d %H:%M:%S"
-            ).strftime(formating)
-            return date_obj
-        except (KeyError, AttributeError):
-            try:
-                image_exif = image.getexif()
-                date_obj = datetime.strptime(
-                    image_exif[306], r"%Y:%m:%d %H:%M:%S"
-                ).strftime(formating)
-                return date_obj
-            except KeyError:
-                if include_creation_type:
-                    date_obj = datetime.fromtimestamp(getctime(path)).strftime(
-                        formating
-                    )
-                    return date_obj
-                return None
+            image_date = datetime.strptime(
+                exif["DateTimeOriginal"], "%Y:%m:%d %H:%M:%S"
+            ).strftime(formatting)
+            return image_date
+        except (KeyError, TypeError):
+            pass
+
+    if include_creation_type:
+        image_date = datetime.fromtimestamp(getctime(path)).strftime(formatting)
+        return image_date
+    return None
 
 
-# def rename_files(source_folders, include_creation_type, recursion, formating):
-#     for folder in source_folders:
-#         for file_name in listdir(folder):
-#             if isfile(join(folder, file_name)) and (
-#                 file_name.lower().endswith(SUPPORTED_EXTENSIONS)
-#             ):
-#                 file_time = get_time(
-#                     join(folder, file_name), include_creation_type, formating
-#                 )
-#                 if file_time:
-#                     new_file_name = f"{file_time}-{file_name}"
-#                 else:
-#                     new_file_name = file_name
-#                 rename(join(folder, file_name), join(folder, new_file_name))
-#             elif isdir(join(folder, file_name)) and recursion != 0:
-#                 rename_files(
-#                     (join(folder, file_name),), include_creation_type, recursion - 1
-#                 )
+def rename_files(
+    source_folders: list[Path],
+    include_creation_type: bool,
+    recursion: int,
+    formatting: str,
+):
 
-
-def rename_files(source_folders, include_creation_type, recursion, formating):
     for folder in source_folders:
+        if not isdir(folder):
+            print(f"Directory not found: '{folder}'")
+            continue
+
         for dirpath, _, files in walk(folder):
             if recursion == -1 or dirpath[len(folder) :].count(sep) <= recursion:
                 for file_name in files:
                     if file_name.lower().endswith(SUPPORTED_EXTENSIONS):
+                        file_path = Path(dirpath, file_name)
                         file_time = get_time(
-                            join(dirpath, file_name), include_creation_type, formating
+                            file_path, include_creation_type, formatting
                         )
+
                         if file_time:
-                            new_file_name = f"{file_time}-{file_name}"
-                            rename(
-                                join(dirpath, file_name), join(dirpath, new_file_name)
-                            )
+                            new_file_path = Path(dirpath, f"{file_time}-{file_name}")
+
+                            try:
+                                rename(file_path, new_file_path)
+                            except PermissionError:
+                                raise PermissionError(
+                                    f"Permission denied: Unable to rename '{file_path}' due to file permission"
+                                )
+                            except FileExistsError:
+                                raise FileExistsError(
+                                    f"File already exists: '{new_file_path}' already exists"
+                                )
 
 
-def undo_rename_files(source_folders, recursion, formating):
+def undo_rename_files(source_folders: list[Path], recursion: int, formatting: str):
     for folder in source_folders:
+        if not isdir(folder):
+            print(f"Directory not found: '{folder}'")
+
         for dirpath, _, files in walk(folder):
             if recursion == -1 or dirpath[len(folder) :].count(sep) <= recursion:
                 for file_name in files:
                     if file_name.lower().endswith(SUPPORTED_EXTENSIONS):
-                        file_time = get_time(join(dirpath, file_name), True, formating)
+                        file_path = Path(dirpath, file_name)
+                        file_time = get_time(file_path, True, formatting)
+
                         if file_name.startswith(file_time):
-                            new_file_name = file_name.replace(f"{file_time}-", "")
-                            rename(
-                                join(dirpath, file_name), join(dirpath, new_file_name)
+                            new_file_path = Path(
+                                dirpath, file_name.replace(f"{file_time}-", "")
                             )
 
+                            try:
+                                rename(file_path, new_file_path)
+                            except OSError as E:
+                                print(E)
 
-def validate_recursion_value(value: str):
+
+def validate_recursion_value(value: str) -> int:
     try:
-        value = int(value)
-        if value >= -1 and value != 0:
-            return value
-    except Exception as E:
-        raise argparse.ArgumentTypeError(f"invalid recursion value: {E}")
+        int(value)
+    except ValueError as E:
+        raise argparse.ArgumentTypeError(
+            f"Invalid recursion value: '{value}' must be an integer"
+        )
+
+    value = int(value)
+    if value >= -1:
+        return value
+    else:
+        raise argparse.ArgumentTypeError(
+            f"Invalid recursion value: '{value}' must be greater than or equal to -1"
+        )
 
 
 if __name__ == "__main__":
@@ -107,7 +142,7 @@ if __name__ == "__main__":
         "--creation_time",
         action="store_true",
         required=False,
-        help="use file creation time if date taken is not used",
+        help="use file creation time if date taken does not exist",
     )
     parser.add_argument(
         "-r",
@@ -131,7 +166,7 @@ if __name__ == "__main__":
         "--undo",
         action="store_true",
         required=False,
-        help="undos the renaming (use the same format)",
+        help="undoes the renaming (use the same format)",
     )
     args = parser.parse_args()
 
